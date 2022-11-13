@@ -1,7 +1,11 @@
 import express, { Express, Request, Response, NextFunction } from "express";
+
+import cors from "cors";
 import helmet from "helmet";
-import winston from "winston";
 import morgan, { StreamOptions } from "morgan";
+import passport from "passport";
+import { Strategy as BearerStrategy } from "passport-http-bearer";
+import winston from "winston";
 
 // Define your severity levels.
 // With them, You can create log files,
@@ -105,25 +109,70 @@ const morganMiddleware = morgan(
 
 const app: Express = express();
 
+app.use(cors());
 app.use(helmet());
 app.use(express.json());
+app.use(
+  express.urlencoded({
+    extended: true,
+  })
+);
 app.use(morganMiddleware);
 
-function asyncWrapper(callback: Function) {
-  return function (req: Request, res: Response, next: NextFunction) {
-    callback(req, res, next).catch(next);
-  };
-}
+const asyncWrapper =
+  (fn: any) => (req: Request, res: Response, next: NextFunction) =>
+    Promise.resolve(fn(req, res, next)).catch(next);
 
-app.get(
+passport.use(
+  new BearerStrategy(function (token, done) {
+    console.log("HELLLLOOO ::::", token);
+    // calls done providing a user. Optional info can be passed, typically including associated scope, which will be set by Passport at req.authInfo to be used by later middleware for authorization and access control.
+    const user = {};
+    return done(null, user, { scope: "all" });
+  })
+);
+app.post(
   "/",
-  asyncWrapper(async (req: Request, res: Response) => {
+  passport.authenticate("bearer", { session: false }),
+  asyncWrapper(async (req: Request, res: Response, next: NextFunction) => {
+    logger.debug("foo");
+    // throw new HTTPError(400, "FOO NOT FOUND");
     res.send("Express + TypeScript Server");
   })
 );
 
-app.use((error: unknown, req: Request, res: Response, next: NextFunction) => {
-  /* ... */
+class HTTPError extends Error {
+  status: number;
+  message: string;
+
+  constructor(statusCode: number, message: string) {
+    super(message);
+
+    Object.setPrototypeOf(this, new.target.prototype);
+    this.name = Error.name;
+    this.status = statusCode;
+    this.message = message;
+    Error.captureStackTrace(this);
+  }
+}
+
+app.use((error: any, req: Request, res: Response, next: NextFunction) => {
+  const customError: boolean =
+    error.constructor.name === "NodeError" ||
+    error.constructor.name === "SyntaxError"
+      ? false
+      : true;
+
+  res.status(error.statusCode || 500).json({
+    response: "Error",
+    error: {
+      type: customError === false ? "UnhandledError" : error.constructor.name,
+      path: req.path,
+      statusCode: error.statusCode || 500,
+      message: error.message,
+    },
+  });
+  next(error);
 });
 
 export default app;
